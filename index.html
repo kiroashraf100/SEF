@@ -353,15 +353,38 @@ table{color:#EAF0FF}.empty{color:#8E9AB2}.section-title{color:#fff!important}.tx
 
 <script>
 /* ============================= STORAGE HELPERS ============================= */
+/* حط هنا رابط Firebase Realtime Database بتاعك، مثال: https://sef-xxxxx-default-rtdb.firebaseio.com */
+const FIREBASE_URL = "https://sef-shabab-default-rtdb.europe-west1.firebasedatabase.app";
+
 const SHARED = true;
+const _fb = () => FIREBASE_URL.replace(/\/+$/,'');
 async function sGet(key, fallback){
   try{
-    const r = await window.storage.get(key, SHARED);
-    return r ? JSON.parse(r.value) : fallback;
-  }catch(e){ return fallback; }
+    if(_fb()){
+      const res = await fetch(_fb()+'/'+encodeURIComponent(key)+'.json', {cache:'no-store'});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const raw = await res.json();
+      return raw ? JSON.parse(raw) : fallback;
+    }
+    if(window.storage){
+      const r = await window.storage.get(key, SHARED);
+      return r ? JSON.parse(r.value) : fallback;
+    }
+    const r = localStorage.getItem('sef_db_'+key);
+    return r ? JSON.parse(r) : fallback;
+  }catch(e){ console.error('storage get failed', key, e); return fallback; }
 }
 async function sSet(key, value){
-  try{ await window.storage.set(key, JSON.stringify(value), SHARED); }catch(e){ console.error('storage set failed', key, e); }
+  try{
+    const str = JSON.stringify(value);
+    if(_fb()){
+      const res = await fetch(_fb()+'/'+encodeURIComponent(key)+'.json', {method:'PUT', body: JSON.stringify(str)});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      return;
+    }
+    if(window.storage){ await window.storage.set(key, str, SHARED); return; }
+    localStorage.setItem('sef_db_'+key, str);
+  }catch(e){ console.error('storage set failed', key, e); }
 }
 
 /* ============================= LOCAL STORAGE FALLBACK ============================= */
