@@ -1546,7 +1546,7 @@ function manualAttendanceModal(phone){
     <label>الحالة</label>
     <select id="ma-status"><option value="On Time">On Time</option><option value="Late">Late</option><option value="Exception">Exception</option></select>
     <label>SEF Dollars</label>
-    <input type="number" id="ma-sef" value="100"/>
+    <input type="number" id="ma-sef" value="20"/>
     <button class="btn btn-primary mt12" data-action="saveManualAttendance" data-phone="${phone}">حفظ</button>
   </div></div>`;
 }
@@ -1908,7 +1908,7 @@ async function handleAction(action, data){
       if(rec){
         DB.attendance = DB.attendance.filter(a=>a.id!==data.id);
         await sSet('sef:attendance', DB.attendance);
-        if(DB.users[rec.phone]){ DB.users[rec.phone].sefBalance = (DB.users[rec.phone].sefBalance||0) - rec.sef; await sSet('sef:users', DB.users); }
+        if(DB.users[rec.phone]){ DB.users[rec.phone].sefBalance = Math.max(0, (DB.users[rec.phone].sefBalance||0) - (Number(rec.sef)||0)); await sSet('sef:users', DB.users); }
         const ti = DB.transactions.findIndex(t=>t.phone===rec.phone && (t.type==='attendance'||t.type==='manual') && t.meeting===rec.meetingName && t.date===rec.date && Number(t.amount)===Number(rec.sef));
         if(ti>=0){ DB.transactions.splice(ti,1); await sSet('sef:transactions', DB.transactions); }
         toast('تم الحذف'); render();
@@ -1986,6 +1986,20 @@ async function handleAction(action, data){
     }
   }
 }
+
+/* Live dashboard: while the admin is looking at the live or attendance tab, re-read the shared data every 8s
+   (skipped when a modal is open or the page is hidden, so nothing the admin is typing is lost). */
+let liveRefreshBusy = false;
+setInterval(async ()=>{
+  if(liveRefreshBusy || document.hidden) return;
+  if(state.view !== 'admin' || state.modal || !['live','attendance'].includes(state.adminTab)) return;
+  liveRefreshBusy = true;
+  try{
+    await refreshCore();
+    if(state.view === 'admin' && !state.modal && ['live','attendance'].includes(state.adminTab)) render();
+  }catch(e){ console.error('live refresh failed', e); }
+  finally{ liveRefreshBusy = false; }
+}, 8000);
 
 boot();
 </script>
