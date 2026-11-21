@@ -623,6 +623,7 @@ function toast(msg){
 
 /* ============================= BOOTSTRAP ============================= */
 async function boot(){
+  await syncClock();
   DB.users = await sGet('sef:users', {});
   DB.meetings = await sGet('sef:meetings', {});
   DB.attendance = await sGet('sef:attendance', []);
@@ -678,9 +679,37 @@ function qrApiUrl(text){
   });
   return 'https://quickchart.io/qr?' + params.toString();
 }
-function todayStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
-function isThursday(){ return new Date().getDay()===4; }
-function nextThursdayStr(){ const d=new Date(); const delta=(4-d.getDay()+7)%7 || 7; d.setDate(d.getDate()+delta); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+/* ===== Cairo time from the Firebase server clock (not the device clock) =====
+   syncClock() asks Firebase to stamp its own server time, then keeps an offset against the device clock.
+   Every date/time decision (Thursday, 8 PM cutoff) is made in Africa/Cairo from that corrected time. */
+let CLOCK_OFFSET = 0;
+async function syncClock(){
+  try{
+    const t0 = Date.now();
+    const url = FIREBASE_URL + '/sef:clock.json';
+    const r = await fetch(url, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({'.sv':'timestamp'}), cache:'no-store'});
+    if(!r.ok) return false;
+    let ms = await r.json();
+    if(typeof ms !== 'number'){ const g = await fetch(url, {cache:'no-store'}); ms = await g.json(); }
+    if(typeof ms !== 'number') return false;
+    CLOCK_OFFSET = ms - Math.round((t0 + Date.now())/2);
+    return true;
+  }catch(e){ console.error('clock sync failed', e); return false; }
+}
+function nowMs(){ return Date.now() + CLOCK_OFFSET; }
+function cairoParts(ms){
+  const f = new Intl.DateTimeFormat('en-GB', {timeZone:'Africa/Cairo', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23', weekday:'short'});
+  const o = {}; f.formatToParts(new Date(ms)).forEach(x=>{ o[x.type]=x.value; });
+  const dow = {Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6}[o.weekday];
+  return {y:+o.year, m:+o.month, d:+o.day, hh:+o.hour, mm:+o.minute, ss:+o.second, dow};
+}
+/* "Wall clock" milliseconds: Cairo date+time treated as UTC, so two of them can be compared directly. */
+function wallNow(){ const c = cairoParts(nowMs()); return Date.UTC(c.y, c.m-1, c.d, c.hh, c.mm, c.ss); }
+function wallOf(dateStr, hhmm){ const [y,m,d] = dateStr.split('-').map(Number), [h,mi] = String(hhmm).split(':').map(Number); return Date.UTC(y, m-1, d, h||0, mi||0, 0); }
+function pad2(n){ return String(n).padStart(2,'0'); }
+function todayStr(){ const c = cairoParts(nowMs()); return c.y+'-'+pad2(c.m)+'-'+pad2(c.d); }
+function isThursday(){ return cairoParts(nowMs()).dow === 4; }
+function nextThursdayStr(){ const c = cairoParts(nowMs()); const delta = (4 - c.dow + 7) % 7 || 7; return new Date(Date.UTC(c.y, c.m-1, c.d) + delta*86400000).toISOString().slice(0,10); }
 
 
 /* Which meeting should this check-in count toward:
@@ -727,7 +756,6 @@ function genMeetingCode(){ return 'SEF-' + Math.random().toString(36).slice(2,7)
 /* Reward rule: check-in before 8:00 PM = 20 SEF Dollars. From 8:00 PM on, only members with an exception can check in. */
 const ATTEND_SEF = 20;
 const CHECKIN_CUTOFF = '20:00';
-function checkinDeadline(meeting){ return new Date(meeting.date + 'T' + CHECKIN_CUTOFF + ':00'); }
 function computeSefForMinutesLate(minutesLate, meeting){ return ATTEND_SEF; }
 function statusForMinutesLate(minutesLate, meeting){
   if(minutesLate <= 0) return 'On Time';
@@ -785,26 +813,30 @@ async function creditPendingExceptions(){
 }
 
 async function performCheckIn(meeting){
+  if(!(await syncClock())){
+    return { error:'no_clock', message:'تعذّر التحقق من الوقت. اتأكد من الإنترنت وجرّب تاني.' };
+  }
   if(!isThursday()){
     return { error:'thursday_only', message:'تسجيل الحضور متاح يوم الخميس فقط. تقدر تسجّل عضويتك في أي يوم.' };
   }
   await refreshCore();
   const phone = state.phone;
   const user = DB.users[phone];
-  const meetingStart = new Date(meeting.date + 'T' + meeting.startTime + ':00');
-  const now = new Date();
+  const nowWall = wallNow();
+  const cp = cairoParts(nowMs());
+  const now = new Date(nowMs());
   const already = DB.attendance.find(a => a.meetingId === meeting.id && a.phone === phone);
   if(already){
     return { error:'already', message:'لقد سجّلت حضورك بالفعل لهذا الاجتماع 👀' };
   }
-  const minutesLate = Math.floor((now - meetingStart)/60000);
+  const minutesLate = Math.floor((nowWall - wallOf(meeting.date, meeting.startTime))/60000);
   const exception = findActiveExceptionFor(phone, meeting);
 
   let sef, status, exceptionApplied=false, note='';
   if(exception){
     exceptionApplied = true;
-    const deadline = exception.customCheckinUntil ? new Date(meeting.date + 'T' + exception.customCheckinUntil + ':00') : null;
-    if(deadline && now > deadline){
+    const deadline = exception.customCheckinUntil ? wallOf(meeting.date, exception.customCheckinUntil) : null;
+    if(deadline && nowWall > deadline){
       return { error:'late_exception', message:'انتهت مهلة الحضور المسموحة حتى ' + exception.customCheckinUntil + ' حسب الاستثناء الخاص بك.' };
     }
     if(exception.sefMode === 'full'){
@@ -820,7 +852,7 @@ async function performCheckIn(meeting){
       sef = 0; note = (exception.reason||'') + ' · تم احتساب رصيد الاستثناء في محفظتك مسبقًا';
     }
   } else {
-    if(now >= checkinDeadline(meeting)){
+    if(nowWall >= wallOf(meeting.date, CHECKIN_CUTOFF)){
       return { error:'too_late', message:'انتهى وقت تسجيل الحضور (الساعة 8 مساءً). تواصل مع الإدارة لتفعيل استثناء لو كان عندك عذر.' };
     }
     sef = ATTEND_SEF;
@@ -829,7 +861,7 @@ async function performCheckIn(meeting){
 
   const record = {
     id: uid('att'), meetingId: meeting.id, meetingName: meeting.name, phone, name: user.name,
-    date: meeting.date, time: now.toTimeString().slice(0,5), sef, status, exceptionApplied, note,
+    date: meeting.date, time: pad2(cp.hh)+':'+pad2(cp.mm), sef, status, exceptionApplied, note,
     createdAt: now.toISOString(), source:'self'
   };
   DB.attendance.push(record);
@@ -1384,7 +1416,7 @@ function meetingFormModal(editId){
     <label>اسم الاجتماع</label>
     <input type="text" id="mf-name" value="${m? escapeHtml(m.name):'Youth Meeting'}"/>
     <div class="row">
-      <div><label>التاريخ</label><input type="date" id="mf-date" value="${m? m.date : new Date().toISOString().slice(0,10)}"/></div>
+      <div><label>التاريخ</label><input type="date" id="mf-date" value="${m? m.date : todayStr()}"/></div>
       <div><label>وقت البدء</label><input type="time" id="mf-time" value="${m? m.startTime : '19:30'}"/></div>
     </div>
     <label>كود الاجتماع (QR)</label>
@@ -1513,7 +1545,7 @@ function bindEvents(){
         const meetings = Object.values(DB.meetings).sort((a,b)=> new Date(b.date)-new Date(a.date));
         extra.innerHTML = `<label>الاجتماع</label><select id="ex-meeting">${meetings.map(m=>`<option value="${m.id}">${escapeHtml(m.name)} (${m.date})</option>`).join('')}</select>`;
       } else if(scopeSel.value==='multiple'){
-        extra.innerHTML = `<label>سارٍ حتى تاريخ</label><input type="date" id="ex-until-date" value="${new Date().toISOString().slice(0,10)}"/>`;
+        extra.innerHTML = `<label>سارٍ حتى تاريخ</label><input type="date" id="ex-until-date" value="${todayStr()}"/>`;
       } else extra.innerHTML = '';
     });
     scopeSel.dispatchEvent(new Event('change'));
