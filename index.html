@@ -724,13 +724,11 @@ async function ensureTodayMeeting(){
 function genMeetingCode(){ return 'SEF-' + Math.random().toString(36).slice(2,7).toUpperCase(); }
 
 /* ============================= SEF CALCULATION ============================= */
-function computeSefForMinutesLate(minutesLate, meeting){
-  if(minutesLate <= 0) return 100;
-  const table = 100 - (minutesLate*5);
-  const win = meeting.lateWindowMin ?? 15;
-  if(minutesLate > win) return meeting.afterLateSef ?? 0;
-  return Math.max(0, table);
-}
+/* Reward rule: check-in before 8:00 PM = 20 SEF Dollars. From 8:00 PM on, only members with an exception can check in. */
+const ATTEND_SEF = 20;
+const CHECKIN_CUTOFF = '20:00';
+function checkinDeadline(meeting){ return new Date(meeting.date + 'T' + CHECKIN_CUTOFF + ':00'); }
+function computeSefForMinutesLate(minutesLate, meeting){ return ATTEND_SEF; }
 function statusForMinutesLate(minutesLate, meeting){
   if(minutesLate <= 0) return 'On Time';
   const win = meeting.lateWindowMin ?? 15;
@@ -756,7 +754,7 @@ function findActiveExceptionFor(phone, meeting){
    is paid into the wallet as its own transaction, so the balance includes it. */
 function exceptionFixedAmount(ex){
   if(!ex) return 0;
-  if(ex.sefMode==='full') return 100;
+  if(ex.sefMode==='full') return 100; // old exceptions saved as "full" keep their original value
   if(ex.sefMode==='custom') return Number(ex.sefAmount)||0;
   return 0;
 }
@@ -822,11 +820,11 @@ async function performCheckIn(meeting){
       sef = 0; note = (exception.reason||'') + ' · تم احتساب رصيد الاستثناء في محفظتك مسبقًا';
     }
   } else {
-    if(minutesLate > (meeting.lateWindowMin ?? 15)){
-      return { error:'too_late', message:'تجاوزت الوقت المسموح لتسجيل الحضور. تواصل مع الإدارة إذا كان لديك عذر.' };
+    if(now >= checkinDeadline(meeting)){
+      return { error:'too_late', message:'انتهى وقت تسجيل الحضور (الساعة 8 مساءً). تواصل مع الإدارة لتفعيل استثناء لو كان عندك عذر.' };
     }
-    sef = computeSefForMinutesLate(Math.max(0,minutesLate), meeting);
-    status = minutesLate <= 0 ? 'On Time' : 'Late';
+    sef = ATTEND_SEF;
+    status = 'On Time';
   }
 
   const record = {
@@ -1391,10 +1389,7 @@ function meetingFormModal(editId){
     </div>
     <label>كود الاجتماع (QR)</label>
     <input type="text" id="mf-code" value="${m? m.code : genMeetingCode()}" dir="ltr" style="text-align:center; font-weight:800;"/>
-    <div class="row">
-      <div><label>مهلة التأخير (دقيقة)</label><input type="number" id="mf-window" value="${m? (m.lateWindowMin??15) : 15}"/></div>
-      <div><label>SEF بعد انتهاء المهلة</label><input type="number" id="mf-afterlate" value="${m? (m.afterLateSef??0) : 0}"/></div>
-    </div>
+    <div class="hint-box" style="margin:10px 0;">الحضور قبل 8 مساءً = 20 SEF Dollars. بعد 8 مساءً التسجيل بالاستثناءات فقط.</div>
     <div class="toggle-row"><span>اجتماع نشط (الحالي)</span><div class="switch ${m&&m.active?'on':(m?'':'on')}" id="mf-active" data-on="${m? (m.active?'1':'0') : '1'}"></div></div>
     <button class="btn btn-primary mt12" data-action="saveMeeting" data-id="${editId||''}">حفظ</button>
   </div></div>`;
@@ -1495,13 +1490,8 @@ function exceptionFormModal(phone){
     <div id="ex-scope-extra"></div>
     <div class="toggle-row"><span>تمديد وقت الحضور لوقت محدد</span><div class="switch" id="ex-custom-toggle" data-on="0"></div></div>
     <div id="ex-custom-time-wrap" style="display:none;"><label>مسموح الحضور حتى</label><input type="time" id="ex-custom-time" value="20:30"/></div>
-    <label>مكافأة SEF Dollars</label>
-    <select id="ex-sefmode">
-      <option value="normal">حساب عادي حسب وقت الحضور</option>
-      <option value="full">مكافأة كاملة (100)</option>
-      <option value="custom">تحديد رقم مخصص</option>
-    </select>
-    <div id="ex-sefamount-wrap" style="display:none;"><label>عدد SEF Dollars</label><input type="number" id="ex-sefamount" value="100"/></div>
+    <label>عدد SEF Dollars اللي هياخدها</label>
+    <input type="number" id="ex-sefamount" min="0" inputmode="numeric" placeholder="اكتب المبلغ" value=""/>
     <button class="btn btn-accent mt12" data-action="saveException">حفظ الاستثناء</button>
   </div></div>`;
 }
@@ -1535,12 +1525,6 @@ function bindEvents(){
       customToggle.dataset.on = on?'0':'1';
       customToggle.classList.toggle('on');
       document.getElementById('ex-custom-time-wrap').style.display = on?'none':'block';
-    });
-  }
-  const sefModeSel = document.getElementById('ex-sefmode');
-  if(sefModeSel){
-    sefModeSel.addEventListener('change', ()=>{
-      document.getElementById('ex-sefamount-wrap').style.display = sefModeSel.value==='custom'?'block':'none';
     });
   }
   const mfActive = document.getElementById('mf-active');
@@ -1847,8 +1831,11 @@ async function handleAction(action, data){
       const validUntilDate = scope==='multiple' ? val('ex-until-date') : null;
       const customToggle = document.getElementById('ex-custom-toggle');
       const customCheckinUntil = customToggle && customToggle.dataset.on==='1' ? val('ex-custom-time') : null;
-      const sefMode = val('ex-sefmode');
-      const sefAmount = sefMode==='custom' ? Number(val('ex-sefamount'))||0 : null;
+      const rawAmt = String(val('ex-sefamount')).trim();
+      if(rawAmt==='' || isNaN(Number(rawAmt)) || Number(rawAmt) < 0){ toast('اكتب عدد SEF Dollars للاستثناء'); break; }
+      if(!phone || !DB.users[phone]){ toast('اختار العضو الأول'); break; }
+      const sefMode = 'custom';
+      const sefAmount = Number(rawAmt);
       const ex = { id: uid('exc'), phone, name: DB.users[phone]?.name, reason: val('ex-reason')||'—', scope, meetingId, validUntilDate,
         customCheckinUntil, sefMode, sefAmount, createdBy: DB.admin.username, createdAt: new Date().toISOString(), active:true };
       DB.exceptions.push(ex); await sSet('sef:exceptions', DB.exceptions);
