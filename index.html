@@ -499,59 +499,89 @@ function clearUrlMeetingCode(){
 }
 
 /* ============================= VERSE API (Bible API) ============================= */
-const THURSDAY_REFERENCES = [
-  'Philippians 4:13','Mark 9:23','Psalm 27:1','Isaiah 40:31','Isaiah 41:10',
-  'Psalm 55:22','2 Timothy 1:7','Matthew 6:33','Joshua 1:9','1 Corinthians 1:9',
-  'Romans 8:28','1 Corinthians 10:31'
+/* Verses come from the getBible API (Arabic Smith & Van Dyke, "arabicsv"), so the text is always the exact
+   published wording and never hand-typed. b = book number (Matthew = 40 ... Revelation = 66). */
+const THURSDAY_VERSES = [
+  {b:50, c:4,  v1:13, v2:13, ar:'رسالة فيلبي'},
+  {b:41, c:9,  v1:23, v2:23, ar:'إنجيل مرقس'},
+  {b:19, c:27, v1:1,  v2:1,  ar:'سفر المزامير'},
+  {b:23, c:40, v1:31, v2:31, ar:'سفر إشعياء'},
+  {b:23, c:41, v1:10, v2:10, ar:'سفر إشعياء'},
+  {b:19, c:55, v1:22, v2:22, ar:'سفر المزامير'},
+  {b:55, c:1,  v1:7,  v2:7,  ar:'رسالة تيموثاوس الثانية'},
+  {b:40, c:6,  v1:33, v2:33, ar:'إنجيل متى'},
+  {b:6,  c:1,  v1:9,  v2:9,  ar:'سفر يشوع'},
+  {b:46, c:1,  v1:9,  v2:9,  ar:'رسالة كورنثوس الأولى'},
+  {b:45, c:8,  v1:28, v2:28, ar:'رسالة رومية'},
+  {b:46, c:10, v1:31, v2:31, ar:'رسالة كورنثوس الأولى'}
 ];
-const FALLBACK_VERSES = [
-  {text:'أَسْتَطِيعُ كُلَّ شَيْءٍ فِي الْمَسِيحِ الَّذِي يُقَوِّينِي.', ref:'رسالة فيلبي (4:13)'},
-  {text:'كُلُّ شَيْءٍ مُسْتَطَاعٌ لِلْمُؤْمِنِ.', ref:'مرقس (9:23)'},
-  {text:'الرَّبُّ نُورِي وَخَلَاصِي، مِمَّنْ أَرْهَبُ؟', ref:'مزمور (27:1)'},
-  {text:'أَمَّا الرَّاجُونَ الرَّبَّ فَيُجَدِّدُونَ قُوَّةً.', ref:'إشعياء (40:31)'},
-  {text:'لاَ تَخَفْ لأَنِّي مَعَكَ. لاَ تَتَلَفَّتْ لأَنِّي إِلهُكَ.', ref:'إشعياء (41:10)'},
-  {text:'أَلْقِ عَلَى الرَّبِّ هَمَّكَ فَهُوَ يَعُولُكَ.', ref:'مزمور (55:22)'},
-  {text:'لأَنَّ اللهَ لَمْ يُعْطِنَا رُوحَ الْفَشَلِ، بَلْ رُوحَ الْقُوَّةِ وَالْمَحَبَّةِ وَالنُّصْحِ.', ref:'رسالة تيموثاوس الثانية (1:7)'},
-  {text:'أَطْلُبُوا أَوَّلًا مَلَكُوتَ اللهِ وَبِرَّهُ، وَهذِهِ كُلُّهَا تُزَادُ لَكُمْ.', ref:'متى (6:33)'},
-  {text:'كُنْ قَوِيًّا وَتَشَجَّعْ. لاَ تَخَفْ وَلاَ تَرْتَعِبْ.', ref:'يشوع (1:9)'},
-  {text:'أَمِينٌ هُوَ اللهُ الَّذِي بِهِ دُعِيتُمْ إِلَى شَرِكَةِ ابْنِهِ.', ref:'كورنثوس الأولى (1:9)'},
-  {text:'وَنَحْنُ نَعْلَمُ أَنَّ كُلَّ الأَشْيَاءِ تَعْمَلُ مَعًا لِلْخَيْرِ لِلَّذِينَ يُحِبُّونَ اللهَ.', ref:'رومية (8:28)'},
-  {text:'فَإِنْ كُنْتُمْ تَأْكُلُونَ أَوْ تَشْرَبُونَ أَوْ تَفْعَلُونَ شَيْئًا، فَافْعَلُوا كُلَّ شَيْءٍ لِمَجْدِ اللهِ.', ref:'كورنثوس الأولى (10:31)'}
-];
-
-async function fetchVerseFromAPI(reference){
-  try{
-    // Try Arabic Van Dyke translation via bible-api.com
-    const url = `https://bible-api.com/${encodeURIComponent(reference)}?translation=arbvd`;
-    const res = await fetch(url, {cache: 'no-store'});
-    if(!res.ok) throw new Error('API error');
-    const data = await res.json();
-    if(data && data.text && data.reference){
-      return { text: data.text.trim(), ref: data.reference };
-    }
-  }catch(e){ console.warn('Verse API failed, using fallback', e); }
+function verseRefLabel(it){ return it.ar + ' ' + it.c + ':' + it.v1 + (it.v2>it.v1 ? '-' + it.v2 : ''); }
+function cleanVerseText(t){ return String(t||'').replace(/<[^>]*>/g,'').replace(/\s+/g,' ').trim(); }
+async function fetchJsonTimeout(url, ms){
+  // No AbortSignal here: some browsers/extensions cannot clone it ("postMessage ... could not be cloned").
+  // The timeout is a plain Promise.race instead.
+  const work = (async()=>{
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  })();
+  let timer;
+  const timeout = new Promise((_, rej)=>{ timer = setTimeout(()=>rej(new Error('timeout')), ms || 8000); });
+  try{ return await Promise.race([work, timeout]); }
+  finally{ clearTimeout(timer); work.catch(()=>{}); }
+}
+function pickVerses(list, it){
+  const vs = (list||[]).filter(x=> Number(x.verse)>=it.v1 && Number(x.verse)<=it.v2).sort((a,b)=>a.verse-b.verse);
+  if(vs.length !== (it.v2-it.v1+1)) return null;
+  const text = vs.map(x=>cleanVerseText(x.text)).join(' ').trim();
+  return text || null;
+}
+let VERSE_ERR = '';
+async function fetchVerseFromAPI(it){
+  const errs = [];
+  const sources = [
+    ['getbible', async()=>{ const d = await fetchJsonTimeout('https://api.getbible.net/v2/arabicsv/' + it.b + '/' + it.c + '.json'); return pickVerses(d && d.verses, it); }],
+    ['bolls',    async()=>{ const d = await fetchJsonTimeout('https://bolls.life/get-text/SVD/' + it.b + '/' + it.c + '/'); return pickVerses(Array.isArray(d) ? d : [], it); }],
+    ['query',    async()=>{ const d = await fetchJsonTimeout('https://query.getbible.net/v2/arabicsv/' + it.b + ' ' + it.c + ':' + it.v1 + '-' + it.v2);
+                            return pickVerses(Object.values(d||{}).flatMap(x=> (x && x.verses) || []), it); }]
+  ];
+  for(const [name, fn] of sources){
+    try{ const t = await fn(); if(t) return t; errs.push(name + ': no match'); }
+    catch(e){ errs.push(name + ': ' + (e && e.message ? e.message : e)); }
+  }
+  VERSE_ERR = errs.join(' | ');
+  console.warn('verse load failed', VERSE_ERR);
   return null;
 }
 
 async function getThursdayVerse(dateStr){
-  // Check local cache first (per-day cache)
-  const cacheKey = 'sef:verse_cache:' + dateStr;
+  const cacheKey = 'sef:verse_cache2:' + dateStr;   // new key: old cached verses were wrong
+  const stored = Object.values(DB.meetings||{}).find(m=> m.date === dateStr && m.verseV === 2 && m.verseText);
+  if(stored){ const r = {text: stored.verseText, ref: stored.verseRef}; lsSet(cacheKey, r); return r; }
   const cached = lsGet(cacheKey, null);
   if(cached && cached.text && cached.ref) return cached;
 
   const d = new Date(dateStr + 'T12:00:00');
   const first = new Date('2026-08-27T12:00:00');
   const weeks = Math.max(0, Math.floor((d-first)/(7*24*60*60*1000)));
-  const refEn = THURSDAY_REFERENCES[weeks % THURSDAY_REFERENCES.length];
-  const fallback = FALLBACK_VERSES[weeks % FALLBACK_VERSES.length];
+  const it = THURSDAY_VERSES[weeks % THURSDAY_VERSES.length];
+  const ref = verseRefLabel(it);
 
-  // Fetch from API
-  const apiResult = await fetchVerseFromAPI(refEn);
-  const result = apiResult || fallback;
-
-  // Cache it for this date
+  const text = await fetchVerseFromAPI(it);
+  if(!text) return { text:'', ref, failed:true };   // never cache or store a failed load
+  const result = { text, ref };
   lsSet(cacheKey, result);
   return result;
+}
+
+/* If a meeting for that Thursday still holds an old (wrong) verse, replace it with the verified one. */
+async function syncMeetingVerse(dateStr, verse){
+  if(!verse || !verse.text) return;
+  const m = Object.values(DB.meetings).find(x=>x.date === dateStr);
+  if(m && (m.verseText !== verse.text || m.verseRef !== verse.ref || m.verseV !== 2)){
+    m.verseText = verse.text; m.verseRef = verse.ref; m.verseV = 2;
+    await sSet('sef:meetings', DB.meetings);
+  }
 }
 
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -655,7 +685,7 @@ async function boot(){
         id, name:'Youth Meeting', date:todayStr(),
         startTime:'19:30', code:genMeetingCode(), active:true,
         lateWindowMin:15, afterLateSef:0, auto:true, qrProvider:'quickchart',
-        verseText: verse.text, verseRef: verse.ref
+        verseText: verse.text, verseRef: verse.ref, verseV: verse.text ? 2 : 0
       };
       await sSet('sef:meetings', DB.meetings);
     }
@@ -664,8 +694,15 @@ async function boot(){
   }
   // Always load the verse for today (or next Thursday) so landingScreen can display it
   const verseDate = isThursday() ? todayStr() : nextThursdayStr();
-  if(!state.currentVerse){
+  if(!state.currentVerse || !state.currentVerse.text){
     state.currentVerse = await getThursdayVerse(verseDate);
+  }
+  await syncMeetingVerse(verseDate, state.currentVerse);
+  if(!state.currentVerse.text){
+    setTimeout(async ()=>{
+      const v = await getThursdayVerse(verseDate);
+      if(v && v.text){ state.currentVerse = v; await syncMeetingVerse(verseDate, v); render(); }
+    }, 5000);
   }
   await creditPendingExceptions();
   state.deviceUser = await resolveDevice();
@@ -751,7 +788,7 @@ async function ensureTodayMeeting(){
     lateWindowMin: template ? (template.lateWindowMin ?? 15) : 15,
     afterLateSef: template ? (template.afterLateSef ?? 0) : 0,
     auto:true, qrProvider:'quickchart',
-    verseText: verse.text, verseRef: verse.ref
+    verseText: verse.text, verseRef: verse.ref, verseV: verse.text ? 2 : 0
   };
   await sSet('sef:meetings', DB.meetings);
 }
@@ -958,10 +995,11 @@ function landingScreen(){
   const scanned = !!state.urlMeetingCode;
   const active = currentMeeting();
   const verseDate = isThursday() ? todayStr() : nextThursdayStr();
-  const fallbackVerse = state.currentVerse || {text:'جارٍ تحميل الآية...', ref:'—'};
-  const verse = active && active.date===verseDate && active.verseText
-    ? {text:active.verseText, ref:active.verseRef}
-    : fallbackVerse;
+  const cv = state.currentVerse;
+  const verse = (cv && cv.text) ? cv
+    : (active && active.date===verseDate && active.verseText) ? {text:active.verseText, ref:active.verseRef}
+    : {text: cv ? 'تعذّر تحميل الآية دلوقتي، جرّب تحدّث الصفحة بعد شوية' : 'جارٍ تحميل الآية...', ref: (cv && cv.ref) || '—'};
+  const verseErr = (cv && !cv.text && VERSE_ERR) ? `<div style="font-size:10px;opacity:.55;direction:ltr;margin-top:6px;word-break:break-all;">${escapeHtml(VERSE_ERR)}</div>` : '';
   const verseLabel = isThursday() ? 'آية الخميس — النهارده' : 'آية الخميس';
   return `
     <main class="landing-main">
@@ -980,7 +1018,7 @@ function landingScreen(){
       <section class="thursday-verse tilt-card fade-in" aria-label="آية الخميس">
         <div class="verse-kicker"><span>📖</span>${verseLabel}</div>
         <div class="verse-text">${escapeHtml(verse.text)}</div>
-        <div class="verse-ref">— ${escapeHtml(verse.ref)} —</div>
+        <div class="verse-ref">— ${escapeHtml(verse.ref)} —</div>${verseErr}
       </section>
 
       ${(()=>{
@@ -1430,6 +1468,9 @@ function meetingFormModal(editId){
     <label>كود الاجتماع (QR)</label>
     <input type="text" id="mf-code" value="${m? m.code : genMeetingCode()}" dir="ltr" style="text-align:center; font-weight:800;"/>
     <div class="hint-box" style="margin:10px 0;">الحضور قبل 8 مساءً = 20 SEF Dollars. بعد 8 مساءً التسجيل بالاستثناءات فقط.</div>
+    <label>آية الخميس (اختياري، لو كتبتها بتظهر لكل الأعضاء بدل الآية التلقائية)</label>
+    <textarea id="mf-verse" rows="3" placeholder="نص الآية">${m && m.verseText ? escapeHtml(m.verseText) : ''}</textarea>
+    <input type="text" id="mf-verseref" placeholder="المرجع، مثال: فيلبي 4:13" value="${m && m.verseRef ? escapeHtml(m.verseRef) : ''}"/>
     <div class="toggle-row"><span>اجتماع نشط (الحالي)</span><div class="switch ${m&&m.active?'on':(m?'':'on')}" id="mf-active" data-on="${m? (m.active?'1':'0') : '1'}"></div></div>
     <button class="btn btn-primary mt12" data-action="saveMeeting" data-id="${editId||''}">حفظ</button>
   </div></div>`;
@@ -1804,11 +1845,21 @@ async function handleAction(action, data){
       const activeToggle = document.getElementById('mf-active');
       const active = activeToggle ? activeToggle.dataset.on==='1' : true;
       if(active){ Object.values(DB.meetings).forEach(m=> m.active=false); }
+      const prev = DB.meetings[id] || {};
       DB.meetings[id] = {
+        ...prev,
         id, name: val('mf-name')||'Meeting', date: val('mf-date'), startTime: val('mf-time'),
-        code: val('mf-code').toUpperCase(), active,
-        lateWindowMin: Number(val('mf-window'))||15, afterLateSef: Number(val('mf-afterlate'))||0
+        code: val('mf-code').toUpperCase(), active
       };
+      const vTxt = String(val('mf-verse')).replace(/\s+/g,' ').trim();
+      if(vTxt){
+        DB.meetings[id].verseText = vTxt;
+        DB.meetings[id].verseRef = String(val('mf-verseref')).trim();
+        DB.meetings[id].verseV = 2;
+        lsSet('sef:verse_cache2:' + DB.meetings[id].date, {text: vTxt, ref: DB.meetings[id].verseRef});
+        const vd = isThursday() ? todayStr() : nextThursdayStr();
+        if(DB.meetings[id].date === vd) state.currentVerse = {text: vTxt, ref: DB.meetings[id].verseRef};
+      }
       await sSet('sef:meetings', DB.meetings);
       closeModal(); toast('تم حفظ الاجتماع'); state.adminTab='meetings'; render();
       break;
