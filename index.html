@@ -441,14 +441,24 @@ async function passError(user, a, b){
 
 /* ============================= STORAGE HELPERS ============================= */
 const SHARED = true;
+const FIREBASE_URL = 'https://sef-shabab-default-rtdb.europe-west1.firebasedatabase.app';
 async function sGet(key, fallback){
   try{
-    const r = await window.storage.get(key, SHARED);
-    return r ? JSON.parse(r.value) : fallback;
-  }catch(e){ return fallback; }
+    const r = await fetch(FIREBASE_URL + '/' + key + '.json', {cache:'no-store'});
+    if(!r.ok){ console.error('firebase get failed', key, r.status); return fallback; }
+    const v = await r.json();
+    if(v === null || v === undefined) return fallback;
+    return typeof v === 'string' ? JSON.parse(v) : v;
+  }catch(e){ console.error('firebase get error', key, e); return fallback; }
 }
 async function sSet(key, value){
-  try{ await window.storage.set(key, JSON.stringify(value), SHARED); }catch(e){ console.error('storage set failed', key, e); }
+  try{
+    const r = await fetch(FIREBASE_URL + '/' + key + '.json', {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(JSON.stringify(value))
+    });
+    if(!r.ok) console.error('firebase set failed', key, r.status);
+  }catch(e){ console.error('firebase set error', key, e); }
 }
 
 /* ============================= LOCAL STORAGE FALLBACK ============================= */
