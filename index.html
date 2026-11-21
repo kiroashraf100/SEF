@@ -927,7 +927,7 @@ function landingScreen(){
   const verse = active && active.date===verseDate && active.verseText
     ? {text:active.verseText, ref:active.verseRef}
     : fallbackVerse;
-  const verseLabel = isThursday() ? 'آية الخميس — النهارده' : 'آية الخميس الجاية';
+  const verseLabel = isThursday() ? 'آية الخميس — النهارده' : 'آية الخميس';
   return `
     <main class="landing-main">
       <div class="ambient-scene">
@@ -985,6 +985,7 @@ function landingScreen(){
         </div>`;
       })()}
       <div class="center mt16" style="position:relative;z-index:2;color:#65718A;font-size:10.5px;">SEF · SHABAB EL FADY · <span style="color:#F2C14E">THURSDAY VIBES</span></div>
+      <div class="center" dir="ltr" style="position:relative;z-index:2;color:#65718A;font-size:10px;line-height:1.7;margin-top:8px;padding-bottom:12px;">All rights reserved Archangel Michael Coptic Orthodox Church, El-Daher<br>developed by Kirollos Ashraf</div>
     </main>
   `;
 }
