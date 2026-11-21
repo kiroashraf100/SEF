@@ -347,6 +347,11 @@ table{color:#EAF0FF}.empty{color:#8E9AB2}.section-title{color:#fff!important}.tx
 .wallet-total{font-weight:900;color:var(--gold);font-size:20px}
 @media(max-width:520px){.currency-grid{grid-template-columns:1fr 1fr}.currency-grid:not(.compact){grid-template-columns:1fr}.voucher-grid{grid-template-columns:1fr}.voucher-meta .btn{width:100%}}
 
+
+/* Dropdown lists: dark popup so the light text stays readable */
+select{color-scheme:dark;}
+select option,select optgroup{background:#11182A !important;color:#F6F8FF !important;}
+select option:checked,select option:hover{background:#055A72 !important;color:#fff !important;}
 </style>
 </head>
 <body>
@@ -1281,6 +1286,8 @@ function adminUserProfile(phone){
   if(!u) return `<div class="empty">المستخدم غير موجود</div>`;
   const atts = DB.attendance.filter(a=>a.phone===phone).sort((a,b)=> new Date(b.date)-new Date(a.date));
   const rate = atts.length? Math.round(atts.filter(a=>a.status==='On Time'||a.status==='Exception').length/atts.length*100):0;
+  const userTxns = DB.transactions.filter(t=>t.phone===phone).slice().reverse();
+  const txnHtml = userTxns.length ? userTxns.map(t=>`<div class="list-item"><div><div style="font-weight:700;">${escapeHtml(t.description||t.type||'')}</div><div class="muted">${escapeHtml(t.meeting||'')} ${t.date||''} · ${t.type||''}${t.exceptionId && !DB.exceptions.some(e=>e.id===t.exceptionId)?' · ⚠️ الاستثناء اتحذف':''}</div></div><div style="display:flex;align-items:center;gap:8px;"><b style="color:var(--teal)">${t.amount>0?'+':''}${t.amount}</b><div class="icon-btn" data-action="deleteTxn" data-id="${t.id}" style="width:30px;height:30px;">🗑</div></div></div>`).join('') : '<div class="muted">مفيش معاملات</div>';
   return `
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:flex-start;">
@@ -1307,6 +1314,7 @@ function adminUserProfile(phone){
     </div>
     <div class="section-title">💵 محفظة SEF Dollars</div><div class="card">${renderSefNotes(u.sefBalance||0,true)}</div>
     <div class="section-title">🎁 Gift Vouchers · إجمالي ${voucherTotal(u)} EGP</div><div class="card">${renderVouchers(u,true)}</div>
+    <div class="section-title">💳 معاملات المحفظة</div><div class="card">${txnHtml}</div>
     <div class="section-title">📋 سجل الحضور</div>
     <div class="card">
       ${atts.length? atts.map(a=>`
@@ -1850,6 +1858,8 @@ async function handleAction(action, data){
         DB.attendance = DB.attendance.filter(a=>a.id!==data.id);
         await sSet('sef:attendance', DB.attendance);
         if(DB.users[rec.phone]){ DB.users[rec.phone].sefBalance = (DB.users[rec.phone].sefBalance||0) - rec.sef; await sSet('sef:users', DB.users); }
+        const ti = DB.transactions.findIndex(t=>t.phone===rec.phone && (t.type==='attendance'||t.type==='manual') && t.meeting===rec.meetingName && t.date===rec.date && Number(t.amount)===Number(rec.sef));
+        if(ti>=0){ DB.transactions.splice(ti,1); await sSet('sef:transactions', DB.transactions); }
         toast('تم الحذف'); render();
       }
       break;
@@ -1881,9 +1891,36 @@ async function handleAction(action, data){
       break;
     }
     case 'deleteException': {
+      await refreshCore();
+      const ex = DB.exceptions.find(e=>e.id===data.id);
+      let reversed = 0;
+      if(ex){
+        const txn = DB.transactions.find(t=>t.exceptionId===ex.id);
+        const user = DB.users[ex.phone];
+        if(txn && user && confirm('الاستثناء ده اتضاف بسببه '+txn.amount+' SEF في المحفظة.\nتحب تسحب المبلغ ده من المحفظة مع الحذف؟\n\nموافق = احذف واسحب المبلغ\nإلغاء = احذف الاستثناء بس واترك الرصيد')){
+          DB.transactions = DB.transactions.filter(t=>t.id!==txn.id);
+          user.sefBalance = Math.max(0, (user.sefBalance||0) - (Number(txn.amount)||0));
+          await sSet('sef:transactions', DB.transactions);
+          await sSet('sef:users', DB.users);
+          reversed = Number(txn.amount)||0;
+        }
+      }
       DB.exceptions = DB.exceptions.filter(e=>e.id!==data.id);
       await sSet('sef:exceptions', DB.exceptions);
-      toast('تم حذف الاستثناء'); render();
+      toast(reversed ? 'تم حذف الاستثناء وسحب '+reversed+' SEF من المحفظة' : 'تم حذف الاستثناء'); render();
+      break;
+    }
+    case 'deleteTxn': {
+      await refreshCore();
+      const txn = DB.transactions.find(t=>t.id===data.id);
+      if(txn && confirm('حذف المعاملة دي ('+(txn.description||txn.type)+' · '+txn.amount+' SEF) وخصم قيمتها من الرصيد؟')){
+        DB.transactions = DB.transactions.filter(t=>t.id!==txn.id);
+        const user = DB.users[txn.phone];
+        if(user) user.sefBalance = Math.max(0, (user.sefBalance||0) - (Number(txn.amount)||0));
+        await sSet('sef:transactions', DB.transactions);
+        await sSet('sef:users', DB.users);
+        toast('تم حذف المعاملة وتعديل الرصيد'); render();
+      }
       break;
     }
 
